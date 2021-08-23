@@ -146,6 +146,7 @@ void reverse_list(list *lst)
     prev = curr;
     curr = next;
   } while (curr != lst->head);
+  // point the last node to the new head
   lst->head->next = prev;
   lst->head = prev;
 }
@@ -154,6 +155,10 @@ void reverse_list(list *lst)
 // any allocated memory in the process
 void reset_list(list *lst)
 {
+  if (is_empty(lst))
+  {
+    return;
+  }
   node *curr = lst->head;
   node *next;
   do
