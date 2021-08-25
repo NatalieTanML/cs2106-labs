@@ -41,7 +41,7 @@ int main(int argc, char **argv)
     FILE *file = fopen(fname, "r");
     if (file == NULL)
     {
-        fprintf(stderr, "Error: File not found\n");
+        fprintf(stderr, "%s is an invalid file name\n", fname);
         exit(1);
     }
 
