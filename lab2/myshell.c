@@ -50,9 +50,13 @@ void my_info()
             pid_t w = waitpid(p->pid, &status, WNOHANG);
             if (w == p->pid)
             {
-                p->running = false;
-                p->exit_status = status;
-                printf("Exited %d\n", p->exit_status);
+                if (WIFEXITED(status))
+                {
+                    int es = WEXITSTATUS(status);
+                    p->running = false;
+                    p->exit_status = es;
+                    printf("Exited %d\n", p->exit_status);
+                }
             }
             else
             {
@@ -82,6 +86,7 @@ int is_background(size_t num_tokens, char **tokens)
 // Execute system program
 void execute_command(size_t num_tokens, char **tokens)
 {
+
     int status, background;
     pid_t pid;
 
@@ -96,41 +101,35 @@ void execute_command(size_t num_tokens, char **tokens)
     else if (pid == 0)
     {
         // child process
-        execvp(tokens[0], tokens);
 
-        // this part runs only if program is not found or error occurs
-        fprintf(stderr, "%s not found\n", tokens[0]);
-        exit(EXIT_FAILURE);
+        // execute the program
+        execvp(tokens[0], tokens);
+        // this part runs only if error occurs when executing
+        perror("child");
     }
     else
     {
         // parent process
+
         if (!background)
         {
             // parent wait for child (foreground process)
             waitpid(pid, &status, 0);
-            process child_process = {.pid = pid, .running = false, .exit_status = status};
-            processes[*no_of_processes] = child_process;
-            *no_of_processes += 1;
+            if (WIFEXITED(status))
+            {
+                int es = WEXITSTATUS(status);
+                process child_process = {.pid = pid, .running = false, .exit_status = es};
+                processes[*no_of_processes] = child_process;
+                *no_of_processes += 1;
+            }
         }
         else
         {
             // parent does not wait (background process)
             printf("Child[%d] in background\n", pid);
-            process child_process = {.pid = pid, .running = true, .exit_status = status};
+            process child_process = {.pid = pid, .running = true, .exit_status = status}; // status will get updated correctly when info is executed
             processes[*no_of_processes] = child_process;
             *no_of_processes += 1;
-        }
-        if (WIFEXITED(status))
-        {
-            int es = WEXITSTATUS(status);
-            for (int i = 0; i < *no_of_processes; i++)
-            {
-                if (processes[i].pid == pid)
-                {
-                    processes[i].exit_status = es;
-                }
-            }
         }
     }
 }
@@ -138,6 +137,8 @@ void execute_command(size_t num_tokens, char **tokens)
 void my_init(void)
 {
     // Initialize what you need here
+
+    // shared list of processes so parent & child can access
     processes = mmap(NULL, MAX_PROCESSES * sizeof(process), PROT_READ | PROT_WRITE,
                      MAP_SHARED | MAP_ANONYMOUS, -1, 0);
     if (!processes)
@@ -159,19 +160,21 @@ void my_process_command(size_t num_tokens, char **tokens)
 {
     // Your code here, refer to the lab document for a description of the arguments
 
-    // empty command
-    if (tokens[0] == NULL)
-        return;
-
     // check if it is a builtin command
     if (strcmp(tokens[0], "info") == 0)
     {
         my_info();
-        return;
     }
-
-    // else, execute the system process
-    execute_command(num_tokens, tokens);
+    // check if program exists & can be accessed
+    else if (access(tokens[0], F_OK) < 0 || access(tokens[0], X_OK) < 0)
+    {
+        fprintf(stderr, "%s not found\n", tokens[0]);
+    }
+    // else, execute the system program
+    else
+    {
+        execute_command(num_tokens, tokens);
+    }
 }
 
 void my_quit(void)
@@ -181,5 +184,4 @@ void my_quit(void)
     munmap(no_of_processes, sizeof(int));
 
     printf("Goodbye!\n");
-    exit(0);
 }
