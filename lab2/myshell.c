@@ -17,12 +17,15 @@
 
 #include "myshell.h"
 
-#define NO_OF_FUNCTIONS 1;
+// Process statuses
+#define STATUS_EXITED 0
+#define STATUS_RUNNING 1
+#define STATUS_TERMINATING 2
 
 typedef struct PROCESS
 {
     pid_t pid;       // process pid
-    bool running;    // check if process is running
+    int status;      // process status
     int exit_status; // process exit status
 } process;
 
@@ -30,8 +33,9 @@ process *processes;   // process list
 int *no_of_processes; // no. of processes spawned
 
 void my_info();
-// void my_wait(pid_t pid);
-// void my_terminate(pid_t pid);
+void my_wait(pid_t pid);
+void my_terminate(pid_t pid);
+
 int is_background(size_t num_tokens, char **tokens);
 void execute_command(size_t num_tokens, char **tokens);
 
@@ -40,20 +44,22 @@ void execute_command(size_t num_tokens, char **tokens);
 // Prints all processes and its PID + status
 void my_info()
 {
+    int status;
+    pid_t wpid;
     for (int i = 0; i < *no_of_processes; i++)
     {
         process *p = &processes[i];
         printf("[%d] ", p->pid);
-        if (p->running)
+        switch (p->status)
         {
-            int status;
-            pid_t w = waitpid(p->pid, &status, WNOHANG);
-            if (w == p->pid)
+        case STATUS_RUNNING:
+            wpid = waitpid(p->pid, &status, WNOHANG);
+            if (wpid == p->pid)
             {
                 if (WIFEXITED(status))
                 {
                     int es = WEXITSTATUS(status);
-                    p->running = false;
+                    p->status = STATUS_EXITED;
                     p->exit_status = es;
                     printf("Exited %d\n", p->exit_status);
                 }
@@ -62,10 +68,66 @@ void my_info()
             {
                 printf("Running\n");
             }
-        }
-        else
-        {
+            break;
+        case STATUS_TERMINATING:
+            wpid = waitpid(p->pid, &status, WNOHANG);
+            if (wpid == p->pid)
+            {
+                if (WIFEXITED(status) || WIFSIGNALED(status))
+                {
+                    int es = WEXITSTATUS(status);
+                    p->status = STATUS_EXITED;
+                    p->exit_status = es;
+                    printf("Exited %d\n", p->exit_status);
+                }
+            }
+            else
+            {
+                printf("Terminating\n");
+            }
+            break;
+        case STATUS_EXITED:
             printf("Exited %d\n", p->exit_status);
+            break;
+        }
+    }
+}
+
+// Waits for child process given PID
+void my_wait(pid_t pid)
+{
+    int status;
+    for (int i = 0; i < *no_of_processes; i++)
+    {
+        process *p = &processes[i];
+        if (p->pid == pid && (p->status == STATUS_RUNNING || p->status == STATUS_TERMINATING))
+        {
+            waitpid(pid, &status, 0);
+            if (WIFEXITED(status))
+            {
+                int es = WEXITSTATUS(status);
+                p->status = STATUS_EXITED;
+                p->exit_status = es;
+            }
+            break;
+        }
+    }
+}
+
+// Terminates running child process given PID
+void my_terminate(pid_t pid)
+{
+    if (kill(pid, SIGTERM) == -1)
+    {
+        perror("sigterm");
+    };
+    for (int i = 0; i < *no_of_processes; i++)
+    {
+        process *p = &processes[i];
+        if (p->pid == pid)
+        {
+            p->status = STATUS_TERMINATING;
+            break;
         }
     }
 }
@@ -86,7 +148,6 @@ int is_background(size_t num_tokens, char **tokens)
 // Execute system program
 void execute_command(size_t num_tokens, char **tokens)
 {
-
     int status, background;
     pid_t pid;
 
@@ -106,6 +167,7 @@ void execute_command(size_t num_tokens, char **tokens)
         execvp(tokens[0], tokens);
         // this part runs only if error occurs when executing
         perror("child");
+        return;
     }
     else
     {
@@ -118,7 +180,7 @@ void execute_command(size_t num_tokens, char **tokens)
             if (WIFEXITED(status))
             {
                 int es = WEXITSTATUS(status);
-                process child_process = {.pid = pid, .running = false, .exit_status = es};
+                process child_process = {.pid = pid, .status = STATUS_EXITED, .exit_status = es};
                 processes[*no_of_processes] = child_process;
                 *no_of_processes += 1;
             }
@@ -127,7 +189,7 @@ void execute_command(size_t num_tokens, char **tokens)
         {
             // parent does not wait (background process)
             printf("Child[%d] in background\n", pid);
-            process child_process = {.pid = pid, .running = true, .exit_status = status}; // status will get updated correctly when info is executed
+            process child_process = {.pid = pid, .status = STATUS_RUNNING, .exit_status = status}; // exit status will get updated correctly when info is executed
             processes[*no_of_processes] = child_process;
             *no_of_processes += 1;
         }
@@ -165,6 +227,14 @@ void my_process_command(size_t num_tokens, char **tokens)
     {
         my_info();
     }
+    else if (strcmp(tokens[0], "wait") == 0)
+    {
+        my_wait(atoi(tokens[1]));
+    }
+    else if (strcmp(tokens[0], "terminate") == 0)
+    {
+        my_terminate(atoi(tokens[1]));
+    }
     // check if program exists & can be accessed
     else if (access(tokens[0], F_OK) < 0 || access(tokens[0], X_OK) < 0)
     {
@@ -180,6 +250,15 @@ void my_process_command(size_t num_tokens, char **tokens)
 void my_quit(void)
 {
     // Clean up function, called after "quit" is entered as a user command
+    for (int i = 0; i < *no_of_processes; i++)
+    {
+        process *p = &processes[i];
+        if (waitpid(p->pid, NULL, WNOHANG) == 0)
+        {
+            kill(p->pid, SIGTERM);
+        }
+    }
+
     munmap(processes, MAX_PROCESSES * sizeof(process));
     munmap(no_of_processes, sizeof(int));
 
