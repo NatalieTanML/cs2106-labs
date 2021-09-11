@@ -1,5 +1,9 @@
 /**
  * CS2106 AY21/22 Semester 1 - Lab 2
+ * 
+ * Tan Ming Li, Natalie
+ * A0220822U
+ * 
  *
  * This file contains function definitions. Your implementation should go in
  * this file.
@@ -37,11 +41,14 @@ void my_wait(pid_t pid);
 void my_terminate(pid_t pid);
 
 int is_background(size_t num_tokens, char **tokens);
-void execute_command(size_t num_tokens, char **tokens);
+void process_commands(size_t num_tokens, char **tokens);
+int execute_command(size_t num_tokens, char **tokens);
 
-// Builtin functions
+// ---------------- Builtin functions ----------------
 
-// Prints all processes and its PID + status
+/**
+ * Prints all processes and its PID + status
+ */
 void my_info()
 {
     int status;
@@ -93,7 +100,9 @@ void my_info()
     }
 }
 
-// Waits for child process given PID
+/**
+ * Waits for child process given PID
+ */
 void my_wait(pid_t pid)
 {
     int status;
@@ -114,7 +123,9 @@ void my_wait(pid_t pid)
     }
 }
 
-// Terminates running child process given PID
+/**
+ * Terminates running child process given PID
+ */
 void my_terminate(pid_t pid)
 {
     if (kill(pid, SIGTERM) == -1)
@@ -132,9 +143,21 @@ void my_terminate(pid_t pid)
     }
 }
 
-// Misc. helper functions
+// ---------------- Misc. helper functions ----------------
 
-// Checks if command is to be run in the background or not
+/**
+ * Checks if program can be accessed or exists
+ * @return 1 if cannot be executed, 0 if executable
+ */
+int is_not_executable(char *token)
+{
+    return (access(token, F_OK) < 0 || access(token, X_OK) < 0);
+}
+
+/**
+ * Checks if command is to be run in the background or not
+ * @return 1 if is background, 0 if foreground
+ */
 int is_background(size_t num_tokens, char **tokens)
 {
     int background = (strcmp(tokens[num_tokens - 2], "&") == 0);
@@ -145,37 +168,98 @@ int is_background(size_t num_tokens, char **tokens)
     return background;
 }
 
-// Execute system program
-void execute_command(size_t num_tokens, char **tokens)
+/**
+ * Checks if there are multiple commands in the input
+ * @return 1 if multiple commands, 0 if single command
+ */
+int is_multiple(size_t num_tokens, char **tokens)
 {
-    int status, background;
-    pid_t pid;
+    int ret = 0;
+    for (size_t i = 0; i < num_tokens; i++)
+    {
+        if (tokens[i] == NULL)
+            break;
+        if (strcmp(tokens[i], "&&") == 0)
+        {
+            ret = 1;
+            break;
+        }
+    }
+    return ret;
+}
 
+/**
+ * Processes & runs each command sequentially, breaking when an error occurs
+ */
+void process_commands(size_t num_tokens, char **tokens)
+{
+    size_t start = 0, end;
+    int exe_ret;
+
+    for (end = 0; end < num_tokens; end++)
+    {
+        // The first condition is for the last command in the chain which has no trailing &&
+        if (end == num_tokens - 1 || strcmp(tokens[end], "&&") == 0)
+        {
+            tokens[end] = NULL;
+            size_t size = (end - start + 1) * sizeof(char *);
+            char **sub_tokens = malloc(size);
+            if (sub_tokens)
+                memcpy(sub_tokens, tokens + start, size);
+
+            if (is_not_executable(sub_tokens[0]))
+            {
+                fprintf(stderr, "%s not found\n", sub_tokens[0]);
+                free(sub_tokens);
+                return;
+            }
+
+            exe_ret = execute_command(size / sizeof(char *), sub_tokens);
+            if (exe_ret != 0)
+            {
+                fprintf(stderr, "%s failed\n", sub_tokens[0]);
+                free(sub_tokens);
+                return;
+            }
+            start = end + 1;
+            free(sub_tokens);
+        }
+    }
+}
+
+/**
+ * Executes the system command
+ * @return Exit value of the process
+ */
+int execute_command(size_t num_tokens, char **tokens)
+{
+    int status, background, ret = 0;
     background = is_background(num_tokens, tokens);
-    pid = fork();
+    pid_t pid = fork();
 
     if (pid < 0)
     {
-        // error forking
+        // Error forking
         perror("fork");
+        ret = EXIT_FAILURE;
     }
     else if (pid == 0)
     {
-        // child process
+        // Child process
 
-        // execute the program
+        // Execute the program
         execvp(tokens[0], tokens);
-        // this part runs only if error occurs when executing
+        // This part runs only if error occurs when executing
         perror("child");
-        return;
+        ret = EXIT_FAILURE;
     }
     else
     {
-        // parent process
+        // Parent process
 
         if (!background)
         {
-            // parent wait for child (foreground process)
+            // Parent wait for child (foreground process)
             waitpid(pid, &status, 0);
             if (WIFEXITED(status))
             {
@@ -183,24 +267,31 @@ void execute_command(size_t num_tokens, char **tokens)
                 process child_process = {.pid = pid, .status = STATUS_EXITED, .exit_status = es};
                 processes[*no_of_processes] = child_process;
                 *no_of_processes += 1;
+                ret = es;
             }
         }
         else
         {
-            // parent does not wait (background process)
+            // Parent does not wait (background process)
             printf("Child[%d] in background\n", pid);
+            waitpid(pid, &status, WNOHANG);
+            int es = WEXITSTATUS(status);
             process child_process = {.pid = pid, .status = STATUS_RUNNING, .exit_status = status}; // exit status will get updated correctly when info is executed
             processes[*no_of_processes] = child_process;
             *no_of_processes += 1;
+            ret = es;
         }
     }
+    return ret;
 }
+
+// ---------------- Functions given ----------------
 
 void my_init(void)
 {
     // Initialize what you need here
 
-    // shared list of processes so parent & child can access
+    // Shared list of processes so parent & child can access
     processes = mmap(NULL, MAX_PROCESSES * sizeof(process), PROT_READ | PROT_WRITE,
                      MAP_SHARED | MAP_ANONYMOUS, -1, 0);
     if (!processes)
@@ -222,7 +313,7 @@ void my_process_command(size_t num_tokens, char **tokens)
 {
     // Your code here, refer to the lab document for a description of the arguments
 
-    // check if it is a builtin command
+    // Check if it is a builtin command
     if (strcmp(tokens[0], "info") == 0)
     {
         my_info();
@@ -235,12 +326,17 @@ void my_process_command(size_t num_tokens, char **tokens)
     {
         my_terminate(atoi(tokens[1]));
     }
-    // check if program exists & can be accessed
-    else if (access(tokens[0], F_OK) < 0 || access(tokens[0], X_OK) < 0)
+    // Check if there are multiple commands, and process one by one
+    else if (is_multiple(num_tokens, tokens))
+    {
+        process_commands(num_tokens, tokens);
+    }
+    // If the program cannot be accessed or does not exist
+    else if (is_not_executable(tokens[0]))
     {
         fprintf(stderr, "%s not found\n", tokens[0]);
     }
-    // else, execute the system program
+    // Else, execute the system command
     else
     {
         execute_command(num_tokens, tokens);
