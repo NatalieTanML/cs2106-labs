@@ -18,6 +18,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <errno.h>
+#include <fcntl.h>
 
 #include "myshell.h"
 
@@ -40,7 +41,9 @@ void my_info();
 void my_wait(pid_t pid);
 void my_terminate(pid_t pid);
 
+int is_not_executable(char *token);
 int is_background(size_t num_tokens, char **tokens);
+int is_multiple(size_t num_tokens, char **tokens);
 void process_commands(size_t num_tokens, char **tokens);
 int execute_command(size_t num_tokens, char **tokens);
 
@@ -215,12 +218,13 @@ void process_commands(size_t num_tokens, char **tokens)
             }
 
             exe_ret = execute_command(size / sizeof(char *), sub_tokens);
-            if (exe_ret != 0)
+            if (exe_ret == EXIT_FAILURE)
             {
                 fprintf(stderr, "%s failed\n", sub_tokens[0]);
                 free(sub_tokens);
                 return;
             }
+            // else if (exe_ret)
             start = end + 1;
             free(sub_tokens);
         }
@@ -247,11 +251,83 @@ int execute_command(size_t num_tokens, char **tokens)
     {
         // Child process
 
+        // Check if redirection is needed
+        size_t i = 1;
+        while (tokens[i] != NULL)
+        {
+            // Input redirection
+            if (tokens[i] != NULL && strcmp(tokens[i], "<") == 0)
+            {
+                int fdin = open(tokens[i + 1], O_RDONLY);
+                if (fdin < 0)
+                {
+                    fprintf(stderr, "%s does not exist\n", tokens[i + 1]);
+                    return EXIT_FAILURE;
+                }
+                if (dup2(fdin, STDIN_FILENO) < 0)
+                {
+                    perror("fdin");
+                    return EXIT_FAILURE;
+                }
+                close(fdin);
+                for (size_t j = i; tokens[j - 1] != NULL; j++)
+                {
+                    tokens[j] = tokens[j + 2];
+                }
+            }
+
+            // Output redirection
+            if (tokens[i] != NULL && strcmp(tokens[i], ">") == 0)
+            {
+                int fdout = open(tokens[i + 1], O_CREAT | O_WRONLY | O_TRUNC, 0644);
+                if (fdout < 0)
+                {
+                    perror("fdout");
+                    return EXIT_FAILURE;
+                }
+                if (dup2(fdout, STDOUT_FILENO) < 0)
+                {
+                    perror("fdout");
+                    return EXIT_FAILURE;
+                }
+                close(fdout);
+                for (size_t j = i; tokens[j - 1] != NULL; j++)
+                {
+                    tokens[j] = tokens[j + 2];
+                }
+            }
+
+            // Error redirection
+            if (tokens[i] != NULL && strcmp(tokens[i], "2>") == 0)
+            {
+                int fderr = open(tokens[i + 1], O_WRONLY | O_CREAT, 0644);
+                if (fderr < 0)
+                {
+                    perror("fderr");
+                    return EXIT_FAILURE;
+                }
+                if (dup2(fderr, STDERR_FILENO) < 0)
+                {
+                    perror("fderr");
+                    return EXIT_FAILURE;
+                }
+                dup2(fderr, 2);
+                close(fderr);
+                for (size_t j = i; tokens[j - 1] != NULL; j++)
+                {
+                    tokens[j] = tokens[j + 2];
+                }
+            }
+
+            // Normal token
+            i++;
+        }
+
         // Execute the program
         execvp(tokens[0], tokens);
         // This part runs only if error occurs when executing
         perror("child");
-        ret = EXIT_FAILURE;
+        return EXIT_FAILURE;
     }
     else
     {
@@ -267,7 +343,11 @@ int execute_command(size_t num_tokens, char **tokens)
                 process child_process = {.pid = pid, .status = STATUS_EXITED, .exit_status = es};
                 processes[*no_of_processes] = child_process;
                 *no_of_processes += 1;
-                ret = es;
+                return es;
+            }
+            else
+            {
+                fprintf(stderr, "child pid %d exited with: %d\n", pid, status);
             }
         }
         else
@@ -279,7 +359,7 @@ int execute_command(size_t num_tokens, char **tokens)
             process child_process = {.pid = pid, .status = STATUS_RUNNING, .exit_status = status}; // exit status will get updated correctly when info is executed
             processes[*no_of_processes] = child_process;
             *no_of_processes += 1;
-            ret = es;
+            return es;
         }
     }
     return ret;
