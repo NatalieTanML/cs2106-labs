@@ -46,7 +46,6 @@ static void process_commands(FILE *file) {
     }
 
     exiting = handle_command(num_tokens, &tokens);
-    // printf("%s exiting: %d\n", tokens[0], exiting);
     free(tokens);
 
     if (!exiting) {

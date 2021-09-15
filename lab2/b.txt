@@ -1,3 +1,2 @@
-#!/bin/bash
-exit $result
-result=$1
+hello
+world

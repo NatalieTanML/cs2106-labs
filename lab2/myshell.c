@@ -27,10 +27,6 @@
 #define STATUS_RUNNING 1
 #define STATUS_TERMINATING 2
 
-// Exit status for invalid file
-// Avoid 1, 2, 126-165, 255 as they have special meaning
-#define EXIT_FILEINVALID 3
-
 typedef struct PROCESS
 {
     pid_t pid;       // process pid
@@ -48,6 +44,7 @@ void my_terminate(pid_t pid);
 int is_not_executable(char *token);
 int is_background(size_t num_tokens, char **tokens);
 int is_multiple(size_t num_tokens, char **tokens);
+int is_not_file(size_t num_tokens, char **tokens, size_t *index);
 void process_commands(size_t num_tokens, char **tokens);
 void execute_command(size_t num_tokens, char **tokens, int *ret_status);
 
@@ -196,11 +193,36 @@ int is_multiple(size_t num_tokens, char **tokens)
 }
 
 /**
+ * Checks if command has input redirection, and whether the file
+ * is valid or not
+ * @return 1 if it is input redirection & file does not exist, else 0
+ */
+int is_not_file(size_t num_tokens, char **tokens, size_t *index)
+{
+    int ret = 0;
+    for (size_t i = 0; i < num_tokens; i++)
+    {
+        if (tokens[i] == NULL)
+            break;
+        if (strcmp(tokens[i], "<") == 0)
+        {
+            if (access(tokens[i + 1], F_OK) < 0 || access(tokens[i + 1], R_OK) < 0)
+            {
+                ret = 1;
+                *index = i + 1;
+            }
+            break;
+        }
+    }
+    return ret;
+}
+
+/**
  * Processes & runs each command sequentially, breaking when an error occurs
  */
 void process_commands(size_t num_tokens, char **tokens)
 {
-    size_t start = 0, end;
+    size_t start = 0, end, index;
     int exe_ret;
 
     for (end = 0; end < num_tokens; end++)
@@ -221,17 +243,18 @@ void process_commands(size_t num_tokens, char **tokens)
                 return;
             }
 
-            execute_command(size / sizeof(char *), sub_tokens, &exe_ret);
-
-            if (exe_ret == EXIT_FAILURE)
+            if (is_not_file(size / sizeof(char *), sub_tokens, &index))
             {
-                fprintf(stderr, "%s failed\n", sub_tokens[0]);
+                fprintf(stderr, "%s does not exist\n", sub_tokens[index]);
                 free(sub_tokens);
                 return;
             }
-            else if (exe_ret == EXIT_FILEINVALID)
+
+            execute_command(size / sizeof(char *), sub_tokens, &exe_ret);
+
+            if (exe_ret != EXIT_SUCCESS)
             {
-                // Do not output if its due to invalid file
+                fprintf(stderr, "%s failed\n", sub_tokens[0]);
                 free(sub_tokens);
                 return;
             }
@@ -243,7 +266,7 @@ void process_commands(size_t num_tokens, char **tokens)
 
 /**
  * Executes the system command
- * @return Exit value of the process
+ * @return Exit value of the process in ret_status variable
  */
 void execute_command(size_t num_tokens, char **tokens, int *ret_status)
 {
@@ -272,11 +295,9 @@ void execute_command(size_t num_tokens, char **tokens, int *ret_status)
                 int fdin = open(tokens[i + 1], O_RDONLY);
                 if (fdin < 0)
                 {
-                    fprintf(stderr, "%s does not exist\n", tokens[i + 1]);
-                    *ret_status = EXIT_FILEINVALID;
-                    free(tokens);
-                    exit(EXIT_FILEINVALID);
-                    // exit here, else parent does not catch the exited child
+                    perror("fdin");
+                    *ret_status = EXIT_FAILURE;
+                    return;
                 }
                 if (dup2(fdin, STDIN_FILENO) < 0)
                 {
@@ -330,7 +351,6 @@ void execute_command(size_t num_tokens, char **tokens, int *ret_status)
                     *ret_status = EXIT_FAILURE;
                     return;
                 }
-                dup2(fderr, 2);
                 close(fderr);
                 for (size_t j = i; tokens[j - 1] != NULL; j++)
                 {
@@ -360,17 +380,9 @@ void execute_command(size_t num_tokens, char **tokens, int *ret_status)
             if (WIFEXITED(status))
             {
                 int es = WEXITSTATUS(status);
-                if (es != EXIT_FILEINVALID)
-                {
-                    process child_process = {.pid = pid, .status = STATUS_EXITED, .exit_status = es};
-                    processes[*no_of_processes] = child_process;
-                    *no_of_processes += 1;
-                }
-                else
-                {
-                    // free only for EXIT_FILEINVALID processes
-                    free(tokens);
-                }
+                process child_process = {.pid = pid, .status = STATUS_EXITED, .exit_status = es};
+                processes[*no_of_processes] = child_process;
+                *no_of_processes += 1;
                 *ret_status = es;
             }
         }
@@ -380,16 +392,9 @@ void execute_command(size_t num_tokens, char **tokens, int *ret_status)
             printf("Child[%d] in background\n", pid);
             waitpid(pid, &status, WNOHANG);
             int es = WEXITSTATUS(status);
-            if (es != EXIT_FILEINVALID)
-            {
-                process child_process = {.pid = pid, .status = STATUS_RUNNING, .exit_status = es}; // exit status will get updated correctly when info is executed
-                processes[*no_of_processes] = child_process;
-                *no_of_processes += 1;
-            }
-            else
-            {
-                free(tokens);
-            }
+            process child_process = {.pid = pid, .status = STATUS_RUNNING, .exit_status = es}; // exit status will get updated correctly when `info` is executed
+            processes[*no_of_processes] = child_process;
+            *no_of_processes += 1;
             *ret_status = es;
         }
     }
@@ -423,8 +428,15 @@ void my_process_command(size_t num_tokens, char **tokens)
 {
     // Your code here, refer to the lab document for a description of the arguments
 
+    // For is_not_file
+    size_t index;
+
+    if (tokens[0] == NULL)
+    {
+        return;
+    }
     // Check if it is a builtin command
-    if (strcmp(tokens[0], "info") == 0)
+    else if (strcmp(tokens[0], "info") == 0)
     {
         my_info();
     }
@@ -445,6 +457,11 @@ void my_process_command(size_t num_tokens, char **tokens)
     else if (is_not_executable(tokens[0]))
     {
         fprintf(stderr, "%s not found\n", tokens[0]);
+    }
+    // If there is input redirection and its file does not exist
+    else if (is_not_file(num_tokens, tokens, &index))
+    {
+        fprintf(stderr, "%s does not exist\n", tokens[index]);
     }
     // Else, execute the system command
     else
