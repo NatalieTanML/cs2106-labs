@@ -27,6 +27,10 @@
 #define STATUS_RUNNING 1
 #define STATUS_TERMINATING 2
 
+// Exit status for invalid file
+// Avoid 1, 2, 126-165, 255 as they have special meaning
+#define EXIT_FILEINVALID 3
+
 typedef struct PROCESS
 {
     pid_t pid;       // process pid
@@ -45,7 +49,7 @@ int is_not_executable(char *token);
 int is_background(size_t num_tokens, char **tokens);
 int is_multiple(size_t num_tokens, char **tokens);
 void process_commands(size_t num_tokens, char **tokens);
-int execute_command(size_t num_tokens, char **tokens);
+void execute_command(size_t num_tokens, char **tokens, int *ret_status);
 
 // ---------------- Builtin functions ----------------
 
@@ -217,14 +221,20 @@ void process_commands(size_t num_tokens, char **tokens)
                 return;
             }
 
-            exe_ret = execute_command(size / sizeof(char *), sub_tokens);
+            execute_command(size / sizeof(char *), sub_tokens, &exe_ret);
+
             if (exe_ret == EXIT_FAILURE)
             {
                 fprintf(stderr, "%s failed\n", sub_tokens[0]);
                 free(sub_tokens);
                 return;
             }
-            // else if (exe_ret)
+            else if (exe_ret == EXIT_FILEINVALID)
+            {
+                // Do not output if its due to invalid file
+                free(sub_tokens);
+                return;
+            }
             start = end + 1;
             free(sub_tokens);
         }
@@ -235,9 +245,9 @@ void process_commands(size_t num_tokens, char **tokens)
  * Executes the system command
  * @return Exit value of the process
  */
-int execute_command(size_t num_tokens, char **tokens)
+void execute_command(size_t num_tokens, char **tokens, int *ret_status)
 {
-    int status, background, ret = 0;
+    int status, background;
     background = is_background(num_tokens, tokens);
     pid_t pid = fork();
 
@@ -245,7 +255,8 @@ int execute_command(size_t num_tokens, char **tokens)
     {
         // Error forking
         perror("fork");
-        ret = EXIT_FAILURE;
+        *ret_status = EXIT_FAILURE;
+        return;
     }
     else if (pid == 0)
     {
@@ -262,12 +273,16 @@ int execute_command(size_t num_tokens, char **tokens)
                 if (fdin < 0)
                 {
                     fprintf(stderr, "%s does not exist\n", tokens[i + 1]);
-                    return EXIT_FAILURE;
+                    *ret_status = EXIT_FILEINVALID;
+                    free(tokens);
+                    exit(EXIT_FILEINVALID);
+                    // exit here, else parent does not catch the exited child
                 }
                 if (dup2(fdin, STDIN_FILENO) < 0)
                 {
                     perror("fdin");
-                    return EXIT_FAILURE;
+                    *ret_status = EXIT_FAILURE;
+                    return;
                 }
                 close(fdin);
                 for (size_t j = i; tokens[j - 1] != NULL; j++)
@@ -283,12 +298,14 @@ int execute_command(size_t num_tokens, char **tokens)
                 if (fdout < 0)
                 {
                     perror("fdout");
-                    return EXIT_FAILURE;
+                    *ret_status = EXIT_FAILURE;
+                    return;
                 }
                 if (dup2(fdout, STDOUT_FILENO) < 0)
                 {
                     perror("fdout");
-                    return EXIT_FAILURE;
+                    *ret_status = EXIT_FAILURE;
+                    return;
                 }
                 close(fdout);
                 for (size_t j = i; tokens[j - 1] != NULL; j++)
@@ -304,12 +321,14 @@ int execute_command(size_t num_tokens, char **tokens)
                 if (fderr < 0)
                 {
                     perror("fderr");
-                    return EXIT_FAILURE;
+                    *ret_status = EXIT_FAILURE;
+                    return;
                 }
                 if (dup2(fderr, STDERR_FILENO) < 0)
                 {
                     perror("fderr");
-                    return EXIT_FAILURE;
+                    *ret_status = EXIT_FAILURE;
+                    return;
                 }
                 dup2(fderr, 2);
                 close(fderr);
@@ -327,7 +346,8 @@ int execute_command(size_t num_tokens, char **tokens)
         execvp(tokens[0], tokens);
         // This part runs only if error occurs when executing
         perror("child");
-        return EXIT_FAILURE;
+        *ret_status = EXIT_FAILURE;
+        return;
     }
     else
     {
@@ -336,18 +356,22 @@ int execute_command(size_t num_tokens, char **tokens)
         if (!background)
         {
             // Parent wait for child (foreground process)
-            waitpid(pid, &status, 0);
+            waitpid(pid, &status, WUNTRACED);
             if (WIFEXITED(status))
             {
                 int es = WEXITSTATUS(status);
-                process child_process = {.pid = pid, .status = STATUS_EXITED, .exit_status = es};
-                processes[*no_of_processes] = child_process;
-                *no_of_processes += 1;
-                return es;
-            }
-            else
-            {
-                fprintf(stderr, "child pid %d exited with: %d\n", pid, status);
+                if (es != EXIT_FILEINVALID)
+                {
+                    process child_process = {.pid = pid, .status = STATUS_EXITED, .exit_status = es};
+                    processes[*no_of_processes] = child_process;
+                    *no_of_processes += 1;
+                }
+                else
+                {
+                    // free only for EXIT_FILEINVALID processes
+                    free(tokens);
+                }
+                *ret_status = es;
             }
         }
         else
@@ -356,13 +380,19 @@ int execute_command(size_t num_tokens, char **tokens)
             printf("Child[%d] in background\n", pid);
             waitpid(pid, &status, WNOHANG);
             int es = WEXITSTATUS(status);
-            process child_process = {.pid = pid, .status = STATUS_RUNNING, .exit_status = status}; // exit status will get updated correctly when info is executed
-            processes[*no_of_processes] = child_process;
-            *no_of_processes += 1;
-            return es;
+            if (es != EXIT_FILEINVALID)
+            {
+                process child_process = {.pid = pid, .status = STATUS_RUNNING, .exit_status = es}; // exit status will get updated correctly when info is executed
+                processes[*no_of_processes] = child_process;
+                *no_of_processes += 1;
+            }
+            else
+            {
+                free(tokens);
+            }
+            *ret_status = es;
         }
     }
-    return ret;
 }
 
 // ---------------- Functions given ----------------
@@ -419,7 +449,8 @@ void my_process_command(size_t num_tokens, char **tokens)
     // Else, execute the system command
     else
     {
-        execute_command(num_tokens, tokens);
+        int status;
+        execute_command(num_tokens, tokens, &status);
     }
 }
 
