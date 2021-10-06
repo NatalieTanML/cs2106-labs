@@ -1,0 +1,338 @@
+#!/usr/bin/env python3
+
+import os, sys, subprocess, multiprocessing
+import getopt, glob, re, itertools, math
+import time, tempfile, zipfile, tarfile, csv, shutil
+from operator import itemgetter
+import errno
+import evaluation
+
+BASEPATH = os.getcwd()
+OUTFILE = os.path.join(BASEPATH, "results.csv")
+SOLUTIONDIR = os.path.join(BASEPATH, "baseline")
+SUBMISSIONDIR = os.path.join(BASEPATH, "submissions")
+MAX_ITER = -1
+ARCHIVETYPE = "zip"
+NUM_EX = 6
+TMPDIR = ""
+SCALE = 1.0
+
+ORIG_STDOUT = sys.stdout
+ORIG_STDERR = sys.stderr
+
+
+def usage(rc=2):
+    print("Usage:")
+    print(
+        "  %s" % sys.argv[0]
+        + "\t[-h | --help]"
+        + "\n\t\t[-o <outputfile (%s/results.csv)>]" % BASEPATH
+        + "\n\t\t[-b <baseline-dir (%s/baseline)>]\t The directory with baseline code"
+        % BASEPATH
+        + "\n\t\t[-s <submissions-dir (%s/submissions)>]\t The directory with students' submissions"
+        % BASEPATH
+        + "\n\t\t[-z <archivetype> (zip)]\t The archive type of students' submission"
+        + "\n\t\t[-n <num (total submissions)>]\t Stop after grading 'num' submissions"
+        + "\n\t\t[-e <num (6)>]\t Total number of exercises"
+    )
+    print()
+    sys.exit(rc)
+
+
+def mkdir_p(path):
+    try:
+        os.makedirs(path)
+    except OSError as exc:
+        if exc.errno == errno.EEXIST and os.path.isdir(path):
+            pass
+        else:
+            raise
+
+
+def grouped(iterable, n):
+    return zip(*[iter(iterable)] * n)
+
+
+def pairwise(iterable):
+    a, b = itertools.tee(iterable)
+    next(b, None)
+    return zip(a, b)
+
+
+def is_same_person(file1, file2):
+    if "E" == file1[0].upper() and file1[:8] == file2[:8]:
+        return True
+    elif "A" == file1[0].upper() and file1[:9] == file2[:9]:
+        return True
+    return False
+
+
+def sorted_nicely(l, key):  # Sort the way humans expect
+    convert = lambda text: int(text) if text.isdigit() else text
+    alphanum_key = lambda item: [convert(c) for c in re.split("([0-9]+)", key(item))]
+    return sorted(l, key=alphanum_key)
+
+
+def get_subm_key(file1):
+    if "E" == file1[0].upper():
+        return file1[:8]
+    elif "A" == file1[0].upper():
+        return file1[:9]
+    return "err"
+
+
+def alphanum_key(string):
+    return re.sub("[^0-9a-zA-Z]+", "", string.split(".")[0])
+
+
+def remove_duplicates(
+    submission_files,
+):  # Remove duplicates and select the latest submission
+    submission_files_nodup = []
+    duplicates = set()
+    for subm1, subm2 in pairwise(submission_files):
+        if subm2 and is_same_person(subm1, subm2):
+            duplicates.update(
+                [(alphanum_key(subm1), subm1), (alphanum_key(subm2), subm2)]
+            )
+        elif (alphanum_key(subm1), subm1) not in duplicates:
+            submission_files_nodup.append(subm1)
+    if (alphanum_key(submission_files[-1]), submission_files[-1]) not in duplicates:
+        submission_files_nodup.append(submission_files[-1])
+    duplicates = list(duplicates)
+    duplicates = sorted_nicely(duplicates, itemgetter(0))
+    files_nodup = {}
+    for ind, tup in enumerate(duplicates):
+        unique_key = tup[0]
+        file_name = tup[1]
+        files_nodup[get_subm_key(file_name)] = file_name
+
+    for v in files_nodup.values():
+        submission_files_nodup.append(v)
+
+    return submission_files_nodup
+
+
+def get_submission_files():  # Assuming all submissions to be in SUBMISSIONDIR
+    submission_files = []
+    for filename in glob.glob(os.path.join(SUBMISSIONDIR, "*")):
+        filename = filename.rsplit("/", 1)[-1]
+        pattern = (
+            '^(A|E)\w{7,8}[^"]*.' + ARCHIVETYPE + "$"
+        )  # Assuming all submissions are archived
+        if re.match(pattern, filename):
+            submission_files.append(filename)
+    submission_files.sort()
+    submission_files_nodup = remove_duplicates(submission_files)
+    return submission_files_nodup
+
+
+def extract_file(fname, path):
+    listdir_pr = os.listdir(path)
+    try:
+        shutil.unpack_archive(fname, path)
+    except Exception as e:
+        print(e, file=sys.stderr)
+        return -0.5
+    listdir_ex = os.listdir(path)
+    ex_dirs = list(set(listdir_ex) - set(listdir_pr))
+
+    def is_id(ex_dirs):
+        for el in ex_dirs:
+            pattern = '^(A|E)\w{7,8}[^"]*$'
+            if re.match(pattern, el):
+                return el
+
+    if is_id(ex_dirs):
+        list_l1 = glob.glob(os.path.join(path, is_id(ex_dirs), "*"))
+        for el in list_l1:
+            el = el[:-1] if el.endswith("/") else el
+            shutil.copytree(el, os.path.join(path, el.split("/")[-1]))
+        print(f"[{is_id(ex_dirs)}][ex7] Incorrect zip structure", file=sys.stderr)
+        return -0.5
+    return 0
+
+
+def copy_to_workdir(submission_file, TMPDIR):
+    src = os.path.join(SUBMISSIONDIR, submission_file)
+    dst = os.path.join(TMPDIR, submission_file)
+    try:
+        shutil.copyfile(src, dst)
+    except Exception as e:
+        print(e, file=sys.stderr)
+    return extract_file(dst, TMPDIR)
+
+
+def remove_from_workdir(dirname):
+    for content in os.listdir(dirname):
+        fullpath = os.path.join(dirname, content)
+        try:
+            if os.path.isfile(fullpath) or os.path.islink(fullpath):
+                os.unlink(fullpath)
+            elif os.path.isdir(fullpath):
+                shutil.rmtree(fullpath)
+        except Exception as e:
+            print(e, file=sys.stderr)
+    return
+
+
+# TODO: Logic to kill all child processes and threads spawned
+def kill_children():
+    pass
+
+
+def cleanup():
+    kill_children()
+    # shutil.rmtree(TMPDIR)
+    sys.stdout.close()
+    sys.stderr.close()
+    sys.stdout = ORIG_STDOUT
+    sys.stderr = ORIG_STDERR
+
+
+eval_lst = [
+    evaluation.ex2,  # 2%
+    evaluation.ex3,  # 2%
+    evaluation.ex4,  # 0%
+    evaluation.ex5,  # 2%
+    evaluation.ex6,  # 1%
+    "ex7",  # 0.5%
+]
+
+
+def main():
+    try:
+        opts, args = getopt.getopt(
+            sys.argv[1:],
+            "hb:s:o:z:n:e:f:t:",
+            [
+                "help",
+                "baseline=",
+                "submissions=",
+                "archivetype=",
+                "output=",
+                "stopcount=",
+                "numex=",
+                "scale=",
+            ],
+        )
+    except getopt.GetoptError as e:
+        print(e, file=sys.stderr)
+        usage(1)
+    global SOLUTIONDIR, SUBMISSIONDIR, OUTFILE, MAX_ITER, ARCHIVETYPE, NUM_EX, TMPDIR, SCALE
+    submission_files = []
+    for o, a in opts:
+        if o == "-h" or o == "--help":
+            usage(0)
+        if o == "-b" or o == "--baseline":
+            SOLUTIONDIR = os.path.abspath(a)
+        if o == "-s" or o == "--submissions":
+            SUBMISSIONDIR = os.path.abspath(a)
+        if o == "-o" or o == "--output":
+            OUTFILE = os.path.abspath(a)
+        if o == "-z" or o == "--archivetype":
+            ARCHIVETYPE = a
+        if o == "-n" or o == "--stopcount":
+            MAX_ITER = int(a)
+        if o == "-e" or o == "--numex":
+            NUM_EX = int(a)
+        if o == "-f" or o == "--scale":
+            SCALE = float(a)
+
+    submission_files = get_submission_files()
+    tot_it = len(submission_files) if MAX_ITER == -1 else MAX_ITER
+    print("Grading %s submissions" % tot_it)
+
+    sys.stdout = open("grader.out", "w")
+    sys.stderr = open("grader.err", "w")
+
+    try:
+        TMPDIR = tempfile.mkdtemp()
+    except Exception as e:
+        print(e, file=sys.stderr)
+
+    with open(OUTFILE, "w") as csv_file:
+        writer = csv.writer(csv_file, delimiter=",")
+        # well, not start from Ex1 any more, and I don't feel like changing to `x + 2`
+        header = (
+            ["StudentID"]
+            + ["Ex2", "Ex3", "Ex4", "Ex5", "Ex6", "Ex7"][:NUM_EX]
+            + ["Total", "FileName"]
+        )
+        writer.writerow(header)
+
+        class RunEval(multiprocessing.Process):
+            def __init__(self, sub_file, queue):
+                multiprocessing.Process.__init__(self)
+                self.sub_file = sub_file
+                self.queue = queue
+
+            def run_eval(self):
+                workdir = os.path.join(TMPDIR, alphanum_key(self.sub_file))
+                mkdir_p(workdir)
+                ret_ex7 = copy_to_workdir(self.sub_file, workdir)
+                res_ex = []
+                for _ex in range(0, NUM_EX):
+                    if eval_lst[_ex] == "ex7":
+                        ret = ret_ex7
+                    else:
+                        ret = eval_lst[_ex](
+                            os.path.join(SUBMISSIONDIR, self.sub_file),
+                            workdir,
+                            SOLUTIONDIR,
+                        )
+                    res_ex.insert(_ex, ret)
+                self.queue.put(
+                    [get_subm_key(self.sub_file)]
+                    + res_ex
+                    + [round(SCALE * max(0, sum(res_ex))), self.sub_file]
+                )
+                # remove_from_workdir(workdir)
+
+            def run(self):
+                try:
+                    self.run_eval()
+                except Exception as e:
+                    raise e
+
+            def join(self):
+                try:
+                    multiprocessing.Process.join(self)
+                except Exception as e:
+                    raise e
+
+        q = multiprocessing.Queue()
+        pid = []
+        for _it in range(tot_it):
+            pid.insert(_it, RunEval(sub_file=submission_files[_it], queue=q))
+            pid[_it].daemon = True
+            pid[_it].start()
+
+        for _it in range(tot_it):
+            try:
+                pid[_it].join()
+            except Exception as e:
+                print(e, file=sys.stderr)
+
+        while not q.empty():
+            writer.writerow(q.get())
+
+    try:
+        cleanup()
+    except Exception as e:
+        print(e, file=sys.stderr)
+
+    print("Done.")
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except KeyboardInterrupt:
+        if os.path.exists(TMPDIR):
+            print("\nCtrl-C detected: Removing %s" % (TMPDIR), file=sys.stdout)
+            try:
+                cleanup()
+            except Exception as e:
+                print(e, file=sys.stderr)
+        sys.exit(-1)

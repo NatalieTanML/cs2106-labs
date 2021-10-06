@@ -5,44 +5,59 @@
 #include <semaphore.h>
 
 // You can declare global variables here
-int count = 0;
-sem_t *mutex;
-sem_t *waiting;
+typedef struct BALL
+{
+    int colour; // colour of the ball
+    int id;     // id of this ball
+} ball_t;
+
+sem_t mutex;
+sem_t waiting[3];         // 1 sem for each colour
+ball_t *balls[3];         // 2d array of balls, 3 = no of colours
+int count[3] = {0, 0, 0}; // count of no. of balls
 
 void packer_init(void)
 {
     // Write initialization code here (called once at the start of the program).
-    mutex = (sem_t *)malloc(sizeof(sem_t));
-    waiting = (sem_t *)malloc(sizeof(sem_t));
-
-    sem_init(mutex, 0, 1);
-    sem_init(waiting, 0, 0);
+    sem_init(&mutex, 0, 1);
+    for (int i = 0; i < 3; ++i)
+    {
+        balls[i] = (ball_t *)malloc(2 * sizeof(ball_t));
+        sem_init(&waiting[i], 0, 0);
+    }
 }
 
 void packer_destroy(void)
 {
     // Write deinitialization code here (called once at the end of the program).
-    sem_destroy(mutex);
-    sem_destroy(waiting);
-    free(mutex);
-    free(waiting);
+    sem_destroy(&mutex);
+    for (int i = 0; i < 3; ++i)
+    {
+        sem_destroy(&waiting[i]);
+        free(balls[i]);
+    }
 }
 
 int pack_ball(int colour, int id)
 {
     // Write your code here.
-    sem_wait(mutex);
-    printf("Ball colour %d with id %d arrived\n", colour, id);
-    count++;
-    sem_post(mutex);
-    if (count == 2)
+    int c_i = colour - 1;
+    ball_t ball = {.colour = colour, .id = id};
+    ball_t *other = &balls[c_i][1];
+
+    sem_wait(&mutex);
+    balls[c_i][count[c_i]] = ball;
+    count[c_i] += 1;
+    sem_post(&mutex);
+
+    if (count[c_i] == 2)
     {
-        sem_post(waiting);
-        printf("All balls arrived\n");
+        other = &balls[c_i][0];
+        sem_post(&waiting[c_i]);
+        count[c_i] = 0;
     }
+    sem_wait(&waiting[c_i]);
+    sem_post(&waiting[c_i]);
 
-    sem_wait(waiting);
-    sem_post(waiting);
-
-    return id; // need to fix this
+    return other->id;
 }
