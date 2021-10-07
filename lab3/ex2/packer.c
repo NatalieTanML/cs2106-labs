@@ -71,7 +71,7 @@ int pack_ball(int colour, int id)
     other = &box->balls[ball.index + 1];
     box->count += 1;
 
-    if (box->count >= 2)
+    if (box->count >= N)
     {
         int no_of_pairs = box->count / N;
         for (int i = 0; i < no_of_pairs; i++)
@@ -79,17 +79,10 @@ int pack_ball(int colour, int id)
             for (int j = 0; j < N; j++)
             {
                 other = &box->balls[ball.index - 1];
-                // sem_post(&box->waiting);
                 sem_post(&box->waiting[box->head]);
                 box->count -= 1;
                 box->head += 1;
             }
-        }
-        if (box->head == box->tail)
-        {
-            box->head = -1;
-            box->tail = -1;
-            box->count = 0;
         }
     }
     sem_post(&box->box_sem);
