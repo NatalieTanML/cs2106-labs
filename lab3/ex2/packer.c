@@ -18,7 +18,7 @@ typedef struct BALL
 typedef struct BOX
 {
     sem_t box_sem;
-    sem_t waiting;
+    sem_t waiting[MAX_BALLS];
     ball_t balls[MAX_BALLS];
     int count;
     int head;
@@ -33,7 +33,8 @@ void packer_init(void)
     for (int i = 0; i < 3; ++i)
     {
         sem_init(&boxes[i].box_sem, 0, 1);
-        sem_init(&boxes[i].waiting, 0, 0);
+        for (int j = 0; j < MAX_BALLS; j++)
+            sem_init(&boxes[i].waiting[j], 0, 0);
         boxes[i].count = 0;
         boxes[i].head = -1;
         boxes[i].tail = -1;
@@ -46,7 +47,8 @@ void packer_destroy(void)
     for (int i = 0; i < 3; ++i)
     {
         sem_destroy(&boxes[i].box_sem);
-        sem_destroy(&boxes[i].waiting);
+        for (int j = 0; j < MAX_BALLS; j++)
+            sem_destroy(&boxes[i].waiting[j]);
     }
 }
 
@@ -61,7 +63,7 @@ int pack_ball(int colour, int id)
     // Add ball to its colour's queue
     if (box->head == -1)
         box->head = 0;
-    box->tail = (box->tail + 1) % MAX_BALLS;
+    box->tail = box->tail + 1;
     ball_t ball = {.colour = colour, .id = id, .index = box->tail};
     box->balls[box->tail] = ball;
 
@@ -74,11 +76,14 @@ int pack_ball(int colour, int id)
         int no_of_pairs = box->count / N;
         for (int i = 0; i < no_of_pairs; i++)
         {
-            other = &box->balls[ball.index - 1];
-            sem_post(&box->waiting);
-            sem_post(&box->waiting);
-            box->count -= 2;
-            box->head += 2;
+            for (int j = 0; j < N; j++)
+            {
+                other = &box->balls[ball.index - 1];
+                // sem_post(&box->waiting);
+                sem_post(&box->waiting[box->head]);
+                box->count -= 1;
+                box->head += 1;
+            }
         }
         if (box->head == box->tail)
         {
@@ -88,7 +93,7 @@ int pack_ball(int colour, int id)
         }
     }
     sem_post(&box->box_sem);
-    sem_wait(&box->waiting);
+    sem_wait(&box->waiting[box->tail]);
 
     return other->id;
 }
