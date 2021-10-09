@@ -11,7 +11,6 @@
 
 typedef struct
 {
-    sem_t queue_mutex;
     sem_t block;       // to block people from taking tables
     int num_tables;    // no of tables
     int count_taken;   // no of tables taken
@@ -22,7 +21,6 @@ typedef struct
 } queue_t;
 
 sem_t mutex;
-int mutex_val;
 queue_t queues[5]; // 1 queue per table size
 
 void restaurant_init(int num_tables[5])
@@ -38,7 +36,6 @@ void restaurant_init(int num_tables[5])
         int n = num_tables[i];
         queue_t *queue = &queues[i];
 
-        sem_init(&queue->queue_mutex, 0, 1);
         sem_init(&queue->block, 0, 0);
         queue->num_tables = n;
         queue->count_taken = 0;
@@ -64,7 +61,6 @@ void restaurant_destroy(void)
     for (int i = 0; i < 5; i++)
     {
         queue_t *queue = &queues[i];
-        sem_destroy(&queue->queue_mutex);
         sem_destroy(&queue->block);
         free(queue->table_ids);
         free(queue->table_states);
@@ -81,15 +77,11 @@ int request_for_table(group_state *state, int num_people)
     queue_t *queue = &queues[q_i];
 
     sem_wait(&mutex);
-    // sem_getvalue(&mutex, &mutex_val);
-    // printf("85: mutex val %d\n", mutex_val);
     on_enqueue();
     state->size = num_people;
 
     if (queue->must_wait)
     {
-        // sem_getvalue(&mutex, &mutex_val);
-        // printf("94: mutex val %d\n", mutex_val);
         // block until table is available
         queue->count_waiting++;
         sem_post(&mutex);
@@ -109,9 +101,6 @@ int request_for_table(group_state *state, int num_people)
         }
     }
 
-    // sem_getvalue(&mutex, &mutex_val);
-    // printf("113: mutex val %d\n", mutex_val);
-
     queue->count_taken++;
     queue->must_wait = (queue->count_taken == queue->num_tables);
 
@@ -119,10 +108,6 @@ int request_for_table(group_state *state, int num_people)
         sem_post(&queue->block);
     else
         sem_post(&mutex);
-
-    // sem_getvalue(&mutex, &mutex_val);
-    // printf("124: mutex val %d\n", mutex_val);
-    // sem_post(&mutex);
 
     // eat
     return t_id;
@@ -135,10 +120,7 @@ void leave_table(group_state *state)
     int q_i = state->size - 1;
     queue_t *queue = &queues[q_i];
 
-    // sem_wait(&queue->queue_mutex);
     sem_wait(&mutex);
-    // sem_getvalue(&mutex, &mutex_val);
-    // printf("mutex val %d\n", mutex_val);
     int i, t_id;
     t_id = state->table_id;
 
@@ -162,8 +144,4 @@ void leave_table(group_state *state)
         sem_post(&queue->block);
     else
         sem_post(&mutex);
-
-    // sem_getvalue(&mutex, &mutex_val);
-    // printf("mutex val %d\n", mutex_val);
-    // sem_post(&queue->queue_mutex);
 }
