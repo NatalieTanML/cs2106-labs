@@ -4,6 +4,8 @@
 // You may add fields to this struct, but do not modify the name of this struct:
 typedef struct {
     // TODO: Add your fields here
+    int size;     // num of people in this group
+    int table_id; // id of table assigned to this group
 } group_state;
 
 
