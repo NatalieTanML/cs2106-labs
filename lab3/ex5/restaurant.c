@@ -22,6 +22,8 @@ typedef struct
 
 sem_t mutex;
 queue_t queues[5]; // 1 queue per table size
+int swap_q_i;
+bool swap_queue = false;
 
 void restaurant_init(int num_tables[5])
 {
@@ -98,6 +100,14 @@ int request_for_table(group_state *state, int num_people)
         sem_post(&mutex);
         sem_wait(&queue->block);
         queue->count_waiting--;
+        if (swap_queue)
+        {
+            // joining another queue
+            queue = &queues[swap_q_i];
+            q_i = swap_q_i;
+            state->size = swap_q_i + 1;
+            swap_queue = false;
+        }
     }
 
 enter:
@@ -145,15 +155,37 @@ void leave_table(group_state *state)
         {
             if (queue->table_ids[i] == t_id)
             {
-                // state->table_id = 0;
                 queue->table_states[i] = TABLE_FREE;
                 break;
             }
         }
     }
-
     if (queue->count_waiting && (!queue->must_wait))
+    {
         sem_post(&queue->block);
-    else
+    }
+    else if (queue->count_waiting == 0)
+    {
+        for (i = q_i - 1; i >= 0; i--)
+        {
+            if (queues[i].count_waiting && queues[i].must_wait)
+            {
+                swap_queue = true;
+                swap_q_i = q_i;
+                sem_post(&queues[i].block);
+                break;
+            }
+        }
         sem_post(&mutex);
+    }
+    else
+    {
+        sem_post(&mutex);
+    }
 }
+
+/*
+1 1 1 1 1
+Enter 101 1 Enter 102 2 Enter 103 3 Enter 104 4 Enter 105 5 .
+
+*/
