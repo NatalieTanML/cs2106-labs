@@ -48,7 +48,6 @@ int pack_ball(int colour, int id)
     sem_wait(&mutex);
     balls[c_i][count[c_i]] = ball;
     count[c_i] += 1;
-    sem_post(&mutex);
 
     if (count[c_i] == 2)
     {
@@ -56,6 +55,8 @@ int pack_ball(int colour, int id)
         sem_post(&waiting[c_i]);
         count[c_i] = 0;
     }
+    sem_post(&mutex);
+
     sem_wait(&waiting[c_i]);
     sem_post(&waiting[c_i]);
 
