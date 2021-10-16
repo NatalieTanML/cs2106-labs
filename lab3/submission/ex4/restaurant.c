@@ -80,21 +80,21 @@ int request_for_table(group_state *state, int num_people)
     // Write your code here.
     // Return the id of the table you want this group to sit at.
     // TODO
+    sem_wait(&mutex);
     int i, t_id;
     int q_i = num_people - 1;
     queue_t *queue = &queues[q_i];
-
-    sem_wait(&mutex);
     on_enqueue();
+
     state->size = num_people;
 
     if (queue->must_wait)
     {
         // block until table is available
         queue->count_waiting++;
-        sem_post(&mutex);
         int k = queue->waiting_tail;
         queue->waiting_tail++;
+        sem_post(&mutex);
         sem_wait(&queue->block[k]);
         queue->count_waiting--;
     }
