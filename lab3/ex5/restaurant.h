@@ -6,8 +6,8 @@ typedef struct {
     // TODO: Add your fields here
     int size;     // num of people in this group
     int table_id; // id of table assigned to this group
+    int q_i;      // size of table this group was added to
 } group_state;
-
 
 // DO NOT MODIFY THE FUNCTION DECLARATIONS BELOW THIS LINE
 
