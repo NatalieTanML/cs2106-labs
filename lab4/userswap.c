@@ -8,7 +8,6 @@
 #include <string.h>
 #include <sys/types.h>
 #include <stdint.h>
-#include <sys/time.h>
 
 #define DIRTY 1
 #define CLEAN 0
@@ -56,6 +55,7 @@ page_t *create_page(void *start_addr, int page_num)
 	page_t *new_page = malloc(sizeof(page_t));
 	new_page->addr = start_addr;
 	new_page->page_num = page_num;
+	new_page->global_page_num = total_pages;
 	new_page->referenced = REFERENCED;
 	new_page->dirty = CLEAN;
 	new_page->next = NULL;
@@ -221,6 +221,7 @@ void userswap_free(void *mem)
 	while (cur->start_addr != mem)
 		cur = cur->next;
 	// printf("address: %p\naddress: %p\nfree size %zu\n", mem, cur->start_addr, cur->size);
+
 	page_t *cur_page = cur->pages;
 	while (cur_page != NULL)
 	{
