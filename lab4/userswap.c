@@ -11,8 +11,8 @@
 
 #define DIRTY 1
 #define CLEAN 0
-#define REFERENCED 1
-#define NONREFERENCED 0
+// #define REFERENCED 1
+// #define NONREFERENCED 0
 
 typedef struct PAGE
 {
@@ -20,7 +20,7 @@ typedef struct PAGE
 	int page_num;
 	int global_page_num;
 	int dirty;
-	int referenced;
+	// int referenced;
 	struct PAGE *next;
 	struct PAGE *prev;
 } page_t;
@@ -58,7 +58,7 @@ page_t *create_page(void *start_addr, int page_num)
 	new_page->addr = start_addr;
 	new_page->page_num = page_num;
 	new_page->global_page_num = total_pages;
-	new_page->referenced = REFERENCED;
+	// new_page->referenced = REFERENCED;
 	new_page->dirty = CLEAN;
 	new_page->next = NULL;
 	new_page->prev = NULL;
@@ -134,7 +134,6 @@ void page_fault_handler(siginfo_t *info, alloc_t *alloc)
 	if (page != NULL)
 	{
 		// write
-		// page->dirty = DIRTY;
 		if (mprotect(page->addr, page_size, PROT_READ | PROT_WRITE) == -1)
 		{
 			perror("mprotect_rw");
@@ -157,40 +156,7 @@ void page_fault_handler(siginfo_t *info, alloc_t *alloc)
 	}
 	else
 	{
-		// printf("evict, no of evicted pages so far %d\n", total_evicted);
 		// evict
-		// alloc_t *cur = head;
-		// page_t *oldest = cur->pages;
-		// int min_page_num = __INT_MAX__;
-		// while (cur != NULL)
-		// {
-		// 	page_t *cur_page = cur->pages;
-		// 	if (cur_page->page_num < min_page_num)
-		// 	{
-		// 		oldest = cur_page;
-		// 		min_page_num = cur_page->page_num;
-		// 	}
-		// 	cur = cur->next;
-		// }
-		// total_evicted++;
-		// evicted_pages = (page_t *)realloc(evicted_pages, total_evicted * sizeof(page_t));
-
-		// page_t *ptr = evicted_pages;
-		// while (ptr->next != NULL)
-		// 	ptr = ptr->next;
-
-		// ptr->next = oldest;
-
-		// if (mprotect(oldest->addr, page_size, PROT_NONE) == -1)
-		// {
-		// 	perror("mprotect_n");
-		// 	exit(EXIT_FAILURE);
-		// }
-
-		// cur_rm -= page_size;
-		// alloc->page_count--;
-		// alloc->pages = alloc->pages->next;
-
 		if (mprotect(alloc->pages->addr, page_size, PROT_NONE) == -1)
 		{
 			perror("mprotect_evict");
@@ -229,7 +195,6 @@ void segv_handler(int sig, siginfo_t *info, void *ucontext)
 	}
 	if (cur == NULL)
 	{
-		// printf("memory not found\n");
 		sigaction(SIGSEGV, &oldact, NULL);
 		return;
 	}
@@ -251,11 +216,36 @@ void install_segv_handler()
 
 void userswap_set_size(size_t size)
 {
-	// size_t old_lorm = lorm;
-	// lorm = size;
-	// if (cur_rm > size)
-	// {
-	// }
+	ulong rounded_size = (size - 1) / page_size * page_size + page_size; // round off to nearest page size
+	if (cur_rm > rounded_size)
+	{
+		while (cur_rm > rounded_size)
+		{
+			//evict
+			alloc_t *alloc = head;
+			page_t *cur_oldest = alloc->pages;
+			int oldest_page_num = cur_oldest->global_page_num;
+			while (alloc->next != NULL)
+			{
+				if (alloc->pages->global_page_num < oldest_page_num)
+				{
+					oldest_page_num = alloc->pages->global_page_num;
+					cur_oldest = alloc->pages;
+				}
+				alloc = alloc->next;
+			}
+
+			if (mprotect(cur_oldest->addr, page_size, PROT_NONE) == -1)
+			{
+				perror("mprotect_evict");
+				exit(EXIT_FAILURE);
+			}
+			page_t *oldest = remove_first_page(alloc);
+			add_evicted_page(oldest);
+			cur_rm -= page_size;
+		}
+	}
+	lorm = rounded_size;
 }
 
 void *userswap_alloc(size_t size)
@@ -279,7 +269,6 @@ void *userswap_alloc(size_t size)
 	alloc->next = NULL;
 	alloc->page_count = 0;
 	alloc->max_pages = rounded_size / page_size;
-	// alloc evicted pages
 
 	if (head == NULL)
 		head = alloc;
@@ -291,7 +280,6 @@ void *userswap_alloc(size_t size)
 		cur->next = alloc;
 	}
 
-	// printf("alloc_size = %zu,\naddress: %p,\naddress: %p\n", rounded_size, ptr, alloc->start_addr);
 	return ptr;
 }
 
