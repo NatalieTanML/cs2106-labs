@@ -11,7 +11,6 @@ int main(int argc, char *argv[])
   (void)argv;
   const _Bool use_userswap = 1;
   const size_t memory_size = 10 * 1024 * 1024;
-  // const size_t memory_size = 10 * 4096;
 
   volatile uintptr_t *const mem = use_userswap ? userswap_alloc(memory_size) : malloc(memory_size);
   if (!mem)

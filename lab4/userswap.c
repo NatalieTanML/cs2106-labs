@@ -52,9 +52,8 @@ alloc_t *head = NULL;		 // list of allocations
 int page_size;					 // 4096
 int total_pages = 0;		 // global num of pages spawned (for FIFO, never decremented to ensure unique vals)
 size_t lorm = 8626176;	 // default limit
-// size_t lorm = 5 * 4096;
-size_t cur_rm = 0;		 // amt of bytes taken up so far
-int total_evicted = 0; // total no. of evicted pages so far
+size_t cur_rm = 0;			 // amt of bytes taken up so far
+int total_evicted = 0;	 // total no. of evicted pages so far
 
 // swap file stuff
 FILE *swap_file;						// swap file
@@ -207,7 +206,6 @@ void page_fault_handler(siginfo_t *info, alloc_t *alloc)
 	if (page != NULL && page->resident == RESIDENT && page->dirty == CLEAN)
 	{
 		// write
-		// printf("%p write\n", page->addr);
 		page->dirty = DIRTY;
 		if (mprotect(page->addr, page_size, PROT_READ | PROT_WRITE) == -1)
 		{
@@ -220,31 +218,25 @@ void page_fault_handler(siginfo_t *info, alloc_t *alloc)
 		// previously evicted into swap file
 		page->resident = RESIDENT;
 		int swap_offset = page->swap_page_num * page_size;
-		// printf("%p restore, reading from offset %d\n", page->addr, swap_offset);
-
-		char temp[page_size];
+		if (mprotect(page->addr, page_size, PROT_READ | PROT_WRITE) == -1)
+		{
+			perror("page_fault_handler_mprotect_r");
+			exit(EXIT_FAILURE);
+		}
 		swap_file = fopen(swap_file_name, "r+");
 		if (lseek(fileno(swap_file), swap_offset, SEEK_SET) == -1)
 		{
 			perror("page_fault_handler_lseek_old");
 			exit(EXIT_FAILURE);
 		}
-		// if (read(fileno(swap_file), &page->addr, page_size) == -1)
-		if (read(fileno(swap_file), temp, page_size) == -1)
-		// if (read(fileno(swap_file), page->addr, page_size) == -1)
+		if (read(fileno(swap_file), page->addr, page_size) == -1)
 		{
 			printf("%p bad\n", page->addr);
 			perror("page_fault_handler_read_old");
 			exit(EXIT_FAILURE);
 		}
-		if (mprotect(page->addr, page_size, PROT_READ) == -1)
-		{
-			perror("page_fault_handler_mprotect_r");
-			exit(EXIT_FAILURE);
-		}
-		// memcpy(page->addr, temp, page_size);
 		// update the swap location to free
-		// set_swap_loc_free(page->swap_page_num);
+		set_swap_loc_free(page->swap_page_num);
 
 		// shift current page to the end of alloc page list
 		// move_page_to_back(page, alloc);
@@ -256,7 +248,6 @@ void page_fault_handler(siginfo_t *info, alloc_t *alloc)
 		void *addr = sig_addr_to_page_addr(info->si_addr, alloc);
 		page = create_page(addr, alloc->page_count);
 		add_page(page, alloc);
-		// printf("%p create\n", addr);
 		cur_rm += page_size;
 
 		if (mprotect(addr, page_size, PROT_READ) == -1)
@@ -269,7 +260,6 @@ void page_fault_handler(siginfo_t *info, alloc_t *alloc)
 	{
 		// evict
 		page_t *oldest = find_first_resident_page(alloc);
-		// printf("%p evict\n", oldest->addr);
 		if (oldest->dirty == DIRTY)
 		{
 			// set the swap index in page
@@ -280,7 +270,7 @@ void page_fault_handler(siginfo_t *info, alloc_t *alloc)
 			// get free loc
 			swap_loc_t *swap_loc = get_free_swap_loc();
 			swap_loc->page_ptr = oldest;
-			// printf("writing to offset %d\n", swap_offset);
+
 			// write to swap file
 			swap_file = fopen(swap_file_name, "r+");
 			if (lseek(fileno(swap_file), swap_offset, SEEK_SET) == -1)
@@ -289,7 +279,6 @@ void page_fault_handler(siginfo_t *info, alloc_t *alloc)
 				exit(EXIT_FAILURE);
 			}
 			if (write(fileno(swap_file), oldest->addr, page_size) == -1)
-			// if (write(fileno(swap_file), oldest->data, page_size) == -1)
 			{
 				printf("bad %p\n", oldest->addr);
 				printf("bad %p\n", alloc->start_addr);
@@ -297,7 +286,6 @@ void page_fault_handler(siginfo_t *info, alloc_t *alloc)
 				exit(EXIT_FAILURE);
 			}
 			oldest->dirty = CLEAN;
-			// printf("%p evicted successfully\n", oldest->addr);
 		}
 		oldest->resident = NONRESIDENT;
 		// madvise on the page
