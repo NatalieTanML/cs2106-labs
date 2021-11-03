@@ -241,6 +241,11 @@ void page_fault_handler(siginfo_t *info, alloc_t *alloc)
 		// shift current page to the end of alloc page list
 		// move_page_to_back(page, alloc);
 		// printf("page restored successfully\n");
+		if (mprotect(page->addr, page_size, PROT_READ) == -1)
+		{
+			perror("page_fault_handler_mprotect_r");
+			exit(EXIT_FAILURE);
+		}
 	}
 	else if (alloc->page_count < alloc->max_pages && cur_rm < lorm)
 	{
