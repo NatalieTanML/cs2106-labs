@@ -106,14 +106,18 @@ void add_page(page_t *page, alloc_t *alloc)
 	alloc->page_count++;
 	total_pages++;
 	page_t *cur = alloc->pages;
+	page->next = NULL;
 	if (cur == NULL)
+	{
 		alloc->pages = page;
+		page->prev = NULL;
+	}
 	else
 	{
 		while (cur->next != NULL)
 			cur = cur->next;
-		page->prev = cur;
 		cur->next = page;
+		page->prev = cur;
 	}
 }
 
@@ -138,6 +142,7 @@ void move_page_to_back(page_t *page, alloc_t *alloc)
 {
 	remove_page(page, alloc);
 	add_page(page, alloc);
+	page->global_page_num = total_pages;
 }
 
 page_t *find_first_resident_page(alloc_t *alloc)
@@ -239,8 +244,8 @@ void page_fault_handler(siginfo_t *info, alloc_t *alloc)
 		set_swap_loc_free(page->swap_page_num);
 
 		// shift current page to the end of alloc page list
-		// move_page_to_back(page, alloc);
-		// printf("page restored successfully\n");
+		move_page_to_back(page, alloc);
+
 		if (mprotect(page->addr, page_size, PROT_READ) == -1)
 		{
 			perror("page_fault_handler_mprotect_r");
@@ -285,8 +290,6 @@ void page_fault_handler(siginfo_t *info, alloc_t *alloc)
 			}
 			if (write(fileno(swap_file), oldest->addr, page_size) == -1)
 			{
-				printf("bad %p\n", oldest->addr);
-				printf("bad %p\n", alloc->start_addr);
 				perror("page_fault_handler_write");
 				exit(EXIT_FAILURE);
 			}
@@ -358,29 +361,6 @@ void userswap_set_size(size_t size)
 	{
 		while (cur_rm > rounded_size)
 		{
-			// //evict
-			// alloc_t *alloc = head;
-			// page_t *cur_oldest = alloc->pages;
-			// int oldest_page_num = cur_oldest->global_page_num;
-			// while (alloc->next != NULL)
-			// {
-			// 	if (alloc->pages->global_page_num < oldest_page_num)
-			// 	{
-			// 		oldest_page_num = alloc->pages->global_page_num;
-			// 		cur_oldest = alloc->pages;
-			// 	}
-			// 	alloc = alloc->next;
-			// }
-
-			// if (mprotect(cur_oldest->addr, page_size, PROT_NONE) == -1)
-			// {
-			// 	perror("userswap_set_size_mprotect_evict");
-			// 	exit(EXIT_FAILURE);
-			// }
-			// page_t *oldest = remove_first_page(alloc);
-			// add_evicted_page(oldest);
-			// cur_rm -= page_size;
-
 			// evict
 			alloc_t *alloc = head;
 			page_t *cur_oldest = find_first_resident_page(alloc);
@@ -484,7 +464,6 @@ void userswap_free(void *mem)
 	alloc_t *cur = head;
 	while (cur->start_addr != mem)
 		cur = cur->next;
-	// printf("address: %p\naddress: %p\nfree size %zu\n", mem, cur->start_addr, cur->size);
 
 	page_t *cur_page = cur->pages;
 	while (cur_page != NULL)
@@ -492,20 +471,28 @@ void userswap_free(void *mem)
 		page_t *temp = cur_page;
 		cur_page = cur_page->next;
 		free(temp);
+		temp = NULL;
 	}
 
-	// free pages in swap loc if any
+	swap_loc_t *cur_swap_loc = swap_locations;
+	while (cur_swap_loc != NULL)
+	{
+		if (cur_swap_loc->page_ptr == NULL)
+			cur_swap_loc->free = true;
 
-	alloc_t *temp = cur;
-	if (head == temp)
-		head = temp->next;
-	if (temp->next != NULL)
-		temp->next->prev = temp->prev;
-	if (temp->prev != NULL)
-		temp->prev->next = temp->next;
+		cur_swap_loc = cur_swap_loc->next;
+	}
 
-	munmap(mem, temp->size);
-	free(temp);
+	if (head == cur)
+		head = cur->next;
+	if (cur->next != NULL)
+		cur->next->prev = cur->prev;
+	if (cur->prev != NULL)
+		cur->prev->next = cur->next;
+
+	munmap(mem, cur->size);
+	free(cur);
+	cur = NULL;
 }
 
 void *userswap_map(int fd, size_t size)
