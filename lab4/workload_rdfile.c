@@ -12,6 +12,7 @@ int main(int argc, char *argv[]) {
   (void)argc;
   (void)argv;
   const _Bool use_userswap = 1;
+  // const size_t memory_size = 10 * 4096;
   const size_t memory_size = 10 * 1024 * 1024;
 
   uintptr_t *const mem = malloc(memory_size);

@@ -35,6 +35,7 @@ typedef struct ALLOC
 	int page_count;
 	int max_pages;
 	page_t *pages;
+	int fd;
 	struct ALLOC *next;
 	struct ALLOC *prev;
 } alloc_t;
@@ -218,9 +219,9 @@ void page_fault_handler(siginfo_t *info, alloc_t *alloc)
 			exit(EXIT_FAILURE);
 		}
 	}
-	else if (page != NULL && page->resident == NONRESIDENT)
+	else if (page != NULL && page->resident == NONRESIDENT && alloc->fd == -1)
 	{
-		// previously evicted into swap file
+		// previously evicted into swap file and is from alloc
 		page->resident = RESIDENT;
 		int swap_offset = page->swap_page_num * page_size;
 		if (mprotect(page->addr, page_size, PROT_READ | PROT_WRITE) == -1)
@@ -229,15 +230,9 @@ void page_fault_handler(siginfo_t *info, alloc_t *alloc)
 			exit(EXIT_FAILURE);
 		}
 		swap_file = fopen(swap_file_name, "r+");
-		if (lseek(fileno(swap_file), swap_offset, SEEK_SET) == -1)
+		if (pread(fileno(swap_file), page->addr, page_size, swap_offset) == -1)
 		{
-			perror("page_fault_handler_lseek_old");
-			exit(EXIT_FAILURE);
-		}
-		if (read(fileno(swap_file), page->addr, page_size) == -1)
-		{
-			printf("%p bad\n", page->addr);
-			perror("page_fault_handler_read_old");
+			perror("page_fault_handler_pread");
 			exit(EXIT_FAILURE);
 		}
 		// update the swap location to free
@@ -255,12 +250,28 @@ void page_fault_handler(siginfo_t *info, alloc_t *alloc)
 	else if (alloc->page_count < alloc->max_pages && cur_rm < lorm)
 	{
 		// create page
+		cur_rm += page_size;
 		void *addr = sig_addr_to_page_addr(info->si_addr, alloc);
 		page = create_page(addr, alloc->page_count);
+		if (alloc->fd != -1)
+		{
+			// if page allocated by userswap_map
+			if (mprotect(page->addr, page_size, PROT_READ | PROT_WRITE) == -1)
+			{
+				perror("page_fault_handler_mprotect_r");
+				exit(EXIT_FAILURE);
+			}
+			int offset = page->page_num * page_size;
+			if (pread(alloc->fd, page->addr, page_size, offset) == -1)
+			{
+				perror("page_fault_handler_pread_map");
+				exit(EXIT_FAILURE);
+			}
+			// printf("fd %d, addr %p, offset %d\n", alloc->fd, page->addr, offset);
+		}
 		add_page(page, alloc);
-		cur_rm += page_size;
 
-		if (mprotect(addr, page_size, PROT_READ) == -1)
+		if (mprotect(page->addr, page_size, PROT_READ) == -1)
 		{
 			perror("page_fault_handler_mprotect_r");
 			exit(EXIT_FAILURE);
@@ -270,7 +281,7 @@ void page_fault_handler(siginfo_t *info, alloc_t *alloc)
 	{
 		// evict
 		page_t *oldest = find_first_resident_page(alloc);
-		if (oldest->dirty == DIRTY)
+		if (oldest->dirty == DIRTY && alloc->fd == -1)
 		{
 			// set the swap index in page
 			int swap_offset = swap_index * page_size;
@@ -283,14 +294,9 @@ void page_fault_handler(siginfo_t *info, alloc_t *alloc)
 
 			// write to swap file
 			swap_file = fopen(swap_file_name, "r+");
-			if (lseek(fileno(swap_file), swap_offset, SEEK_SET) == -1)
+			if (pwrite(fileno(swap_file), oldest->addr, page_size, swap_offset) == -1)
 			{
-				perror("page_fault_handler_lseek");
-				exit(EXIT_FAILURE);
-			}
-			if (write(fileno(swap_file), oldest->addr, page_size) == -1)
-			{
-				perror("page_fault_handler_write");
+				perror("page_fault_handler_pwrite");
 				exit(EXIT_FAILURE);
 			}
 			oldest->dirty = CLEAN;
@@ -307,12 +313,28 @@ void page_fault_handler(siginfo_t *info, alloc_t *alloc)
 		cur_rm -= page_size;
 
 		// create page
+		cur_rm += page_size;
 		void *addr = sig_addr_to_page_addr(info->si_addr, alloc);
 		page = create_page(addr, alloc->page_count);
+		if (alloc->fd != -1)
+		{
+			// if page allocated by userswap_map
+			if (mprotect(page->addr, page_size, PROT_READ | PROT_WRITE) == -1)
+			{
+				perror("page_fault_handler_mprotect_r");
+				exit(EXIT_FAILURE);
+			}
+			int offset = page->page_num * page_size;
+			if (pread(alloc->fd, page->addr, page_size, offset) == -1)
+			{
+				perror("page_fault_handler_pread_map");
+				exit(EXIT_FAILURE);
+			}
+			// printf("fd %d, addr %p, offset %d\n", alloc->fd, page->addr, offset);
+		}
 		add_page(page, alloc);
-		cur_rm += page_size;
 
-		if (mprotect(addr, page_size, PROT_READ) == -1)
+		if (mprotect(page->addr, page_size, PROT_READ) == -1)
 		{
 			perror("page_fault_handler_mprotect_r");
 			exit(EXIT_FAILURE);
@@ -445,6 +467,7 @@ void *userswap_alloc(size_t size)
 	alloc->next = NULL;
 	alloc->page_count = 0;
 	alloc->max_pages = rounded_size / page_size;
+	alloc->fd = -1;
 
 	if (head == NULL)
 		head = alloc;
@@ -493,9 +516,59 @@ void userswap_free(void *mem)
 	munmap(mem, cur->size);
 	free(cur);
 	cur = NULL;
+
+	if (head == NULL)
+	{
+		// no more allocs left so just free everything else
+		cur_swap_loc = swap_locations;
+		while (cur_swap_loc != NULL)
+		{
+			swap_loc_t *temp = cur_swap_loc;
+			cur_swap_loc = cur_swap_loc->next;
+			free(temp);
+			temp = NULL;
+		}
+	}
 }
 
 void *userswap_map(int fd, size_t size)
 {
-	return NULL;
+	if (size == 0)
+		return NULL;
+
+	install_segv_handler();
+	page_size = sysconf(_SC_PAGESIZE);
+	long rounded_size = (size - 1) / page_size * page_size + page_size; // round off to nearest page size
+	void *ptr = mmap(NULL, rounded_size, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+	if (ptr == MAP_FAILED)
+	{
+		perror("userswap_map_mmap");
+		exit(EXIT_FAILURE);
+	}
+
+	if (ftruncate(fd, rounded_size) == -1)
+	{
+		perror("userswap_map_ftruncate");
+		exit(EXIT_FAILURE);
+	}
+
+	alloc_t *alloc = (alloc_t *)malloc(sizeof(alloc_t));
+	alloc->start_addr = ptr;
+	alloc->size = rounded_size;
+	alloc->next = NULL;
+	alloc->page_count = 0;
+	alloc->max_pages = rounded_size / page_size;
+	alloc->fd = fd;
+
+	if (head == NULL)
+		head = alloc;
+	else
+	{
+		alloc_t *cur = head;
+		while (cur->next != NULL)
+			cur = cur->next;
+		cur->next = alloc;
+	}
+
+	return ptr;
 }
