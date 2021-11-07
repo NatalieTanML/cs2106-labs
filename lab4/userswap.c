@@ -468,26 +468,40 @@ void userswap_set_size(size_t size)
 				alloc = alloc->next;
 			}
 
-			if (cur_oldest->dirty == DIRTY && alloc->fd == -1)
+			if (cur_oldest->dirty == DIRTY)
 			{
-				// set the swap index in page
-				int swap_offset = swap_index * page_size;
-				cur_oldest->swap_page_num = swap_index;
-
-				// set page in the swap locs
-				// get free loc
-				swap_loc_t *swap_loc = get_free_swap_loc();
-				swap_loc->page_ptr = cur_oldest;
-
-				// write to swap file
-				swap_file = fopen(swap_file_name, "r+");
-				if (pwrite(fileno(swap_file), cur_oldest->addr, page_size, swap_offset) == -1)
+				if (alloc->fd == -1)
 				{
-					perror("userswap_set_size_write");
-					exit(EXIT_FAILURE);
+					// set the swap index in page
+					int swap_offset = swap_index * page_size;
+					cur_oldest->swap_page_num = swap_index;
+
+					// set page in the swap locs
+					// get free loc
+					swap_loc_t *swap_loc = get_free_swap_loc();
+					swap_loc->page_ptr = cur_oldest;
+
+					// write to swap file
+					swap_file = fopen(swap_file_name, "r+");
+					if (pwrite(fileno(swap_file), cur_oldest->addr, page_size, swap_offset) == -1)
+					{
+						perror("userswap_set_size_write_alloc");
+						exit(EXIT_FAILURE);
+					}
+					fclose(swap_file);
 				}
-				fclose(swap_file);
+				else
+				{
+					int offset = cur_oldest->page_num * page_size;
+					if (pwrite(alloc->fd, cur_oldest->addr, page_size, offset) == -1)
+					{
+						perror("userswap_set_size_write_map");
+						exit(EXIT_FAILURE);
+					}
+				}
+				cur_oldest->dirty = CLEAN;
 			}
+			cur_oldest->resident = NONRESIDENT;
 			// madvise on the page
 			madvise(cur_oldest->addr, page_size, MADV_DONTNEED);
 			// mprotect NONE
