@@ -73,6 +73,7 @@ int main(int argc, char *argv[]) {
       failed = 1;
     }
   }
+  free(mem);
 
   return failed;
 }

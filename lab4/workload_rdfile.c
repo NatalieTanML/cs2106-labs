@@ -51,6 +51,8 @@ int main(int argc, char *argv[]) {
       failed = 1;
     }
   }
+  free(mem);
+  use_userswap ? userswap_free(file_map) : free(file_map);
 
   return failed;
 }
