@@ -9,6 +9,7 @@
 #include <sys/types.h>
 #include <stdint.h>
 #include <stdbool.h>
+#include <fcntl.h>
 
 // for pages
 #define DIRTY 1
@@ -57,6 +58,7 @@ int total_evicted = 0;	 // total no. of evicted pages so far
 
 // swap file stuff
 FILE *swap_file;						// swap file
+int fd;											// swap file descriptor
 char *swap_file_name;				// name of swap file (process pid)
 int swap_index = 0;					// just a global count
 swap_loc_t *swap_locations; // locations in swap file
@@ -231,13 +233,14 @@ void page_fault_handler(siginfo_t *info, alloc_t *alloc)
 					swap_loc->page_ptr = oldest;
 
 					// write to swap file
-					swap_file = fopen(swap_file_name, "r+");
-					if (pwrite(fileno(swap_file), oldest->addr, page_size, swap_offset) == -1)
+					fd = open(swap_file_name, O_RDWR);
+					if (pwrite(fd, oldest->addr, page_size, swap_offset) == -1)
 					{
 						perror("page_fault_handler_pwrite_alloc");
+						close(fd);
 						exit(EXIT_FAILURE);
 					}
-					fclose(swap_file);
+					close(fd);
 					oldest->dirty = CLEAN;
 				}
 				oldest->resident = NONRESIDENT;
@@ -287,13 +290,13 @@ void page_fault_handler(siginfo_t *info, alloc_t *alloc)
 					perror("page_fault_handler_mprotect_restore_alloc");
 					exit(EXIT_FAILURE);
 				}
-				swap_file = fopen(swap_file_name, "r+");
-				if (pread(fileno(swap_file), page->addr, page_size, swap_offset) == -1)
+				fd = open(swap_file_name, O_RDWR);
+				if (pread(fd, page->addr, page_size, swap_offset) == -1)
 				{
 					perror("page_fault_handler_pread_restore_alloc");
 					exit(EXIT_FAILURE);
 				}
-				fclose(swap_file);
+				close(fd);
 
 				// update the swap location to free
 				set_swap_loc_free(page->swap_page_num);
@@ -482,13 +485,13 @@ void userswap_set_size(size_t size)
 					swap_loc->page_ptr = cur_oldest;
 
 					// write to swap file
-					swap_file = fopen(swap_file_name, "r+");
-					if (pwrite(fileno(swap_file), cur_oldest->addr, page_size, swap_offset) == -1)
+					fd = open(swap_file_name, O_RDWR);
+					if (pwrite(fd, cur_oldest->addr, page_size, swap_offset) == -1)
 					{
 						perror("userswap_set_size_write_alloc");
 						exit(EXIT_FAILURE);
 					}
-					fclose(swap_file);
+					close(fd);
 				}
 				else
 				{
@@ -534,13 +537,14 @@ void *userswap_alloc(size_t size)
 	int pid = getpid();
 	swap_file_name = malloc(14);
 	sprintf(swap_file_name, "%d.swap", pid);
-	swap_file = fopen(swap_file_name, "w+");
-	if (ftruncate(fileno(swap_file), rounded_size) == -1)
+	fd = open(swap_file_name, O_RDWR | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH | S_IWOTH);
+	if (ftruncate(fd, rounded_size) == -1)
 	{
 		perror("userswap_alloc_ftruncate");
+		close(fd);
 		exit(EXIT_FAILURE);
 	}
-	fclose(swap_file);
+	close(fd);
 
 	alloc_t *alloc = (alloc_t *)malloc(sizeof(alloc_t));
 	alloc->start_addr = ptr;
