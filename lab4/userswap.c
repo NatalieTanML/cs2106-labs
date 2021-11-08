@@ -220,39 +220,42 @@ void page_fault_handler(siginfo_t *info, alloc_t *alloc)
 			{
 				// need to evict oldest page
 				page_t *oldest = find_first_resident_page(alloc);
-				if (oldest->dirty == DIRTY)
+				if (oldest != NULL)
 				{
-					// page is modified, write to swap file
-					// set the swap index in page
-					int swap_offset = swap_index * page_size;
-					oldest->swap_page_num = swap_index;
-
-					// set page in the swap locs
-					// get free loc
-					swap_loc_t *swap_loc = get_free_swap_loc();
-					swap_loc->page_ptr = oldest;
-
-					// write to swap file
-					fd = open(swap_file_name, O_RDWR);
-					if (pwrite(fd, oldest->addr, page_size, swap_offset) == -1)
+					if (oldest->dirty == DIRTY)
 					{
-						perror("page_fault_handler_pwrite_alloc");
+						// page is modified, write to swap file
+						// set the swap index in page
+						int swap_offset = swap_index * page_size;
+						oldest->swap_page_num = swap_index;
+
+						// set page in the swap locs
+						// get free loc
+						swap_loc_t *swap_loc = get_free_swap_loc();
+						swap_loc->page_ptr = oldest;
+
+						// write to swap file
+						fd = open(swap_file_name, O_RDWR);
+						if (pwrite(fd, oldest->addr, page_size, swap_offset) == -1)
+						{
+							perror("page_fault_handler_pwrite_alloc");
+							close(fd);
+							exit(EXIT_FAILURE);
+						}
 						close(fd);
+						oldest->dirty = CLEAN;
+					}
+					oldest->resident = NONRESIDENT;
+					// madvise on the page
+					madvise(oldest->addr, page_size, MADV_DONTNEED);
+					// mprotect NONE
+					if (mprotect(oldest->addr, page_size, PROT_NONE) == -1)
+					{
+						perror("page_fault_handler_mprotect_evict");
 						exit(EXIT_FAILURE);
 					}
-					close(fd);
-					oldest->dirty = CLEAN;
+					cur_rm -= page_size;
 				}
-				oldest->resident = NONRESIDENT;
-				// madvise on the page
-				madvise(oldest->addr, page_size, MADV_DONTNEED);
-				// mprotect NONE
-				if (mprotect(oldest->addr, page_size, PROT_NONE) == -1)
-				{
-					perror("page_fault_handler_mprotect_evict");
-					exit(EXIT_FAILURE);
-				}
-				cur_rm -= page_size;
 			}
 
 			// create new page
@@ -323,27 +326,30 @@ void page_fault_handler(siginfo_t *info, alloc_t *alloc)
 			{
 				// need to evict pages
 				page_t *oldest = find_first_resident_page(alloc);
-				if (oldest->dirty == DIRTY)
+				if (oldest != NULL)
 				{
-					// write contents back to backing file
-					int offset = oldest->page_num * page_size;
-					if (pwrite(alloc->fd, oldest->addr, page_size, offset) == -1)
+					if (oldest->dirty == DIRTY)
 					{
-						perror("page_fault_handler_pwrite_fd_map");
+						// write contents back to backing file
+						int offset = oldest->page_num * page_size;
+						if (pwrite(alloc->fd, oldest->addr, page_size, offset) == -1)
+						{
+							perror("page_fault_handler_pwrite_fd_map");
+							exit(EXIT_FAILURE);
+						}
+						oldest->dirty = CLEAN;
+					}
+					oldest->resident = NONRESIDENT;
+					// madvise on the page
+					madvise(oldest->addr, page_size, MADV_DONTNEED);
+					// mprotect NONE
+					if (mprotect(oldest->addr, page_size, PROT_NONE) == -1)
+					{
+						perror("page_fault_handler_mprotect_evict_map");
 						exit(EXIT_FAILURE);
 					}
-					oldest->dirty = CLEAN;
+					cur_rm -= page_size;
 				}
-				oldest->resident = NONRESIDENT;
-				// madvise on the page
-				madvise(oldest->addr, page_size, MADV_DONTNEED);
-				// mprotect NONE
-				if (mprotect(oldest->addr, page_size, PROT_NONE) == -1)
-				{
-					perror("page_fault_handler_mprotect_evict_map");
-					exit(EXIT_FAILURE);
-				}
-				cur_rm -= page_size;
 			}
 
 			// create new page
