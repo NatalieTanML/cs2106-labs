@@ -218,8 +218,21 @@ void page_fault_handler(siginfo_t *info, alloc_t *alloc)
 		{
 			if (cur_rm >= lorm)
 			{
-				// need to evict oldest page
-				page_t *oldest = find_first_resident_page(alloc);
+				// need to evict pages
+				alloc_t *cur_alloc = head;
+				page_t *oldest = find_first_resident_page(cur_alloc);
+				int oldest_page_num = oldest->global_page_num;
+
+				while (cur_alloc->next != NULL)
+				{
+					page_t *temp = find_first_resident_page(cur_alloc->next);
+					if (temp != NULL && temp->global_page_num < oldest_page_num)
+					{
+						oldest_page_num = temp->global_page_num;
+						oldest = temp;
+					}
+					cur_alloc = cur_alloc->next;
+				}
 				if (oldest != NULL)
 				{
 					if (oldest->dirty == DIRTY)
@@ -325,7 +338,20 @@ void page_fault_handler(siginfo_t *info, alloc_t *alloc)
 			if (cur_rm >= lorm)
 			{
 				// need to evict pages
-				page_t *oldest = find_first_resident_page(alloc);
+				alloc_t *cur_alloc = head;
+				page_t *oldest = find_first_resident_page(cur_alloc);
+				int oldest_page_num = oldest->global_page_num;
+
+				while (cur_alloc->next != NULL)
+				{
+					page_t *temp = find_first_resident_page(cur_alloc->next);
+					if (temp != NULL && temp->global_page_num < oldest_page_num)
+					{
+						oldest_page_num = temp->global_page_num;
+						oldest = temp;
+					}
+					cur_alloc = cur_alloc->next;
+				}
 				if (oldest != NULL)
 				{
 					if (oldest->dirty == DIRTY)
@@ -469,10 +495,11 @@ void userswap_set_size(size_t size)
 
 			while (alloc->next != NULL)
 			{
-				if (alloc->pages->global_page_num < oldest_page_num)
+				page_t *temp = find_first_resident_page(alloc->next);
+				if (temp->global_page_num < oldest_page_num)
 				{
-					oldest_page_num = alloc->pages->global_page_num;
-					cur_oldest = alloc->pages;
+					oldest_page_num = temp->global_page_num;
+					cur_oldest = temp;
 				}
 				alloc = alloc->next;
 			}
@@ -481,6 +508,7 @@ void userswap_set_size(size_t size)
 			{
 				if (alloc->fd == -1)
 				{
+					// alloc is set using userswap_alloc
 					// set the swap index in page
 					int swap_offset = swap_index * page_size;
 					cur_oldest->swap_page_num = swap_index;
@@ -501,6 +529,7 @@ void userswap_set_size(size_t size)
 				}
 				else
 				{
+					// alloc is set using userswap_map
 					int offset = cur_oldest->page_num * page_size;
 					if (pwrite(alloc->fd, cur_oldest->addr, page_size, offset) == -1)
 					{
